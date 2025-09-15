@@ -17,6 +17,7 @@ jobs:
 
       - name: Install system dependencies
         run: |
+          set -euo pipefail
           sudo apt-get install -y \
             gawk util-linux coreutils p7zip-full git qemu-user-static \
             binfmt-support python3-git
@@ -108,25 +109,37 @@ jobs:
           EOF
           chmod +x "$MOD/start_chroot_script"
 
-          # Make sure our module runs first
-          if grep -q '^ACTIVATE_MODULES=' repository/src/config; then
-            sed -i 's/^ACTIVATE_MODULES="\([^"]*\)"/ACTIVATE_MODULES="00-preseed-initramfs \1"/' repository/src/config
+          # --- Ensure config has a trailing newline, then prepend our module safely ---
+          # Avoid gluing tokens like: BASE_IMAGE_ENLARGEROOT=1000ACTIVATE_MODULES=...
+          sed -i -e '$a\' repository/src/config
+
+          # Prepend to ACTIVATE_MODULES if present, else prepend to MODULES, else create ACTIVATE_MODULES
+          if grep -q '^ACTIVATE_MODULES="' repository/src/config; then
+            sed -i -E 's/^ACTIVATE_MODULES="([^"]*)"/ACTIVATE_MODULES="00-preseed-initramfs \1"/' repository/src/config
+          elif grep -q '^MODULES="' repository/src/config; then
+            sed -i -E 's/^MODULES="([^"]*)"/MODULES="00-preseed-initramfs \1"/' repository/src/config
           else
-            echo 'ACTIVATE_MODULES="00-preseed-initramfs ${ACTIVATE_MODULES}"' >> repository/src/config
+            printf 'ACTIVATE_MODULES="00-preseed-initramfs"\n' >> repository/src/config
           fi
+
+          # Quick sanity print
+          grep -E '^(BASE_IMAGE_ENLARGEROOT|ACTIVATE_MODULES|MODULES)=' repository/src/config || true
 
       - name: Download Raspberry Pi OS (armhf lite)
         run: |
+          set -euo pipefail
           cd repository/src/image
           wget -c --trust-server-names 'https://downloads.raspberrypi.org/raspios_lite_armhf_latest'
 
       - name: Update CustomPiOS paths
         run: |
+          set -euo pipefail
           cd repository/src
           ../../CustomPiOS/src/update-custompios-paths
 
       - name: Show qemu binfmt registrations
         run: |
+          set -euo pipefail
           sudo update-binfmts --display qemu-arm || true
           sudo update-binfmts --display qemu-aarch64 || true
 
@@ -134,6 +147,7 @@ jobs:
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
+          set -euo pipefail
           sudo modprobe loop
           cd repository/src
           sudo bash -x ./build_dist
@@ -142,6 +156,7 @@ jobs:
         if: success()
         id: copy
         run: |
+          set -euo pipefail
           source repository/src/config
           image=PiFireOS-${{ github.ref_name }}
           cp repository/src/workspace/*.img ${image}.img
@@ -149,7 +164,9 @@ jobs:
 
       - name: Compress image
         if: success()
-        run: zip "${{ env.image }}.zip" "${{ env.image }}.img"
+        run: |
+          set -euo pipefail
+          zip "${{ env.image }}.zip" "${{ env.image }}.img"
 
       - name: Upload to release - ${{ github.ref_name }}
         if: success() && startsWith(github.ref, 'refs/tags/')
