@@ -1,61 +1,66 @@
 name: Build Release Image
 
 on:
-  workflow_dispatch:            # ← adds the "Run workflow" button
+  workflow_dispatch:
   release:
     types: [ published ]
 
 permissions:
-  contents: write               # needed to upload release assets
+  contents: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Update Dependencies
-        run: |
-          sudo apt update
+      - name: Update apt
+        run: sudo apt-get update
 
-      - name: Install Dependencies
+      # CustomPiOS deps (from its docs) + extras that help in CI
+      - name: Install system dependencies
         run: |
-          sudo apt update
-          sudo apt install -y coreutils p7zip-full qemu-user-static python3-git
-
-      # Needed by CustomPiOS's generate_board_config.py (imports 'git')
-      - name: Install Python deps
-        run: |
-          python3 -m pip install --upgrade pip
-          python3 -m pip install gitpython
+          sudo apt-get install -y \
+            gawk util-linux coreutils p7zip-full git qemu-user-static \
+            binfmt-support python3-git
 
       - name: Checkout CustomPiOS
-        uses: actions/checkout@v3.3.0
+        uses: actions/checkout@v4
         with:
-          repository: 'guysoft/CustomPiOS'
+          repository: guysoft/CustomPiOS
           path: CustomPiOS
 
       - name: Checkout Project Repository
-        uses: actions/checkout@v3.3.0
+        uses: actions/checkout@v4
         with:
           path: repository
           submodules: true
 
-      - name: Download Raspbian Image
+      - name: Download Raspberry Pi OS (armhf lite)
         run: |
           cd repository/src/image
           wget -c --trust-server-names 'https://downloads.raspberrypi.org/raspios_lite_armhf_latest'
 
-      - name: Update CustomPiOS Paths
+      - name: Update CustomPiOS paths
         run: |
           cd repository/src
           ../../CustomPiOS/src/update-custompios-paths
 
+      # (Optional) sanity check that qemu binfmt is registered
+      - name: Show qemu binfmt registrations
+        run: |
+          sudo update-binfmts --display qemu-arm || true
+          sudo update-binfmts --display qemu-aarch64 || true
+
       - name: Build Image
+        env:
+          # Helps avoid interactive postinsts in chroot (tzdata, etc.)
+          DEBIAN_FRONTEND: noninteractive
         run: |
           sudo modprobe loop
           cd repository/src
           sudo bash -x ./build_dist
 
-      - name: Copy Output
+      - name: Copy output image
+        if: success()
         id: copy
         run: |
           source repository/src/config
@@ -63,12 +68,13 @@ jobs:
           cp repository/src/workspace/*.img ${image}.img
           echo "image=${image}" >> $GITHUB_ENV
 
-      - name: Compress the image
-        run: zip ${{ env.image }}.zip ${{ env.image }}.img
+      - name: Compress image
+        if: success()
+        run: zip "${{ env.image }}.zip" "${{ env.image }}.img"
 
       - name: Upload to release - ${{ github.ref_name }}
+        if: success() && startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
-        if: startsWith(github.ref, 'refs/tags/')
         with:
           files: ${{ env.image }}.zip
 
@@ -90,4 +96,4 @@ jobs:
             repository/src/workspace/chroot/var/log/apt/term.log
             repository/src/workspace/chroot/var/log/dpkg.log
             repository/src/workspace/chroot/var/log/apt/history.log
-          if-no-files-found: warn   
+          if-no-files-found: warn
