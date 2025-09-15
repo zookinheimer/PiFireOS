@@ -6,65 +6,67 @@ on:
     types: [ published ]
 
 permissions:
-  contents: write  
+  contents: write               # needed to upload release assets
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - name: Update Dependencies
-      run: |
-        sudo apt update
-    - name: Install Dependencies
-      run: |
-        sudo apt install coreutils p7zip-full qemu-user-static
+      - name: Update Dependencies
+        run: |
+          sudo apt update
 
-    - name: Checkout CustomPiOS
-      uses: actions/checkout@v3.3.0
-      with:
-        repository: 'guysoft/CustomPiOS'
-        path: CustomPiOS
+      - name: Install Dependencies
+        run: |
+          sudo apt install -y coreutils p7zip-full qemu-user-static
 
-    - name: Checkout Project Repository
-      uses: actions/checkout@v3.3.0
-      with:
-        path: repository
-        submodules: true
+      # Needed by CustomPiOS's generate_board_config.py (imports 'git')
+      - name: Install Python deps
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install gitpython
 
-    - name: Download Raspbian Image
-      run: |
-        cd repository/src/image
-        wget -c --trust-server-names 'https://downloads.raspberrypi.org/raspios_lite_armhf_latest'
+      - name: Checkout CustomPiOS
+        uses: actions/checkout@v3.3.0
+        with:
+          repository: 'guysoft/CustomPiOS'
+          path: CustomPiOS
 
-    - name: Update CustomPiOS Paths
-      run: |
-        cd repository/src
-        ../../CustomPiOS/src/update-custompios-paths
+      - name: Checkout Project Repository
+        uses: actions/checkout@v3.3.0
+        with:
+          path: repository
+          submodules: true
 
-    - name: Install Python deps
-      run: |
-        python3 -m pip install --upgrade pip
-        python3 -m pip install gitpython
-    
-    - name: Build Image
-      run: |
-        sudo modprobe loop
-        cd repository/src
-        sudo bash -x ./build_dist
+      - name: Download Raspbian Image
+        run: |
+          cd repository/src/image
+          wget -c --trust-server-names 'https://downloads.raspberrypi.org/raspios_lite_armhf_latest'
 
-    - name: Copy Output
-      id: copy
-      run: |
-        source repository/src/config
-        image=PiFireOS-${{ github.ref_name }}
-        cp repository/src/workspace/*.img ${image}.img
-        echo "image=${image}" >> $GITHUB_ENV
+      - name: Update CustomPiOS Paths
+        run: |
+          cd repository/src
+          ../../CustomPiOS/src/update-custompios-paths
 
-    - name: Compress the image
-      run: zip ${{ env.image }}.zip ${{ env.image }}.img
+      - name: Build Image
+        run: |
+          sudo modprobe loop
+          cd repository/src
+          sudo bash -x ./build_dist
 
-    - name: Upload to release - ${{ github.ref_name }}
-      uses: softprops/action-gh-release@v1
-      if: startsWith(github.ref, 'refs/tags/')
-      with:
-        files: ${{ env.image }}.zip
+      - name: Copy Output
+        id: copy
+        run: |
+          source repository/src/config
+          image=PiFireOS-${{ github.ref_name }}
+          cp repository/src/workspace/*.img ${image}.img
+          echo "image=${image}" >> $GITHUB_ENV
+
+      - name: Compress the image
+        run: zip ${{ env.image }}.zip ${{ env.image }}.img
+
+      - name: Upload to release - ${{ github.ref_name }}
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: ${{ env.image }}.zip
