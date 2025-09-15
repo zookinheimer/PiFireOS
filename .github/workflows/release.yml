@@ -18,7 +18,8 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          sudo apt install -y coreutils p7zip-full qemu-user-static
+          sudo apt update
+          sudo apt install -y coreutils p7zip-full qemu-user-static python3-git
 
       # Needed by CustomPiOS's generate_board_config.py (imports 'git')
       - name: Install Python deps
