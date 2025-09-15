@@ -44,6 +44,37 @@ jobs:
           cd repository/src
           ../../CustomPiOS/src/update-custompios-paths
 
+      - name: Force noninteractive dpkg in chroot (avoid initramfs prompt)
+        run: |
+          set -e
+          # Create a module that runs FIRST
+          mkdir -p repository/src/modules/00-apt-noninteractive
+
+          cat > repository/src/modules/00-apt-noninteractive/chroot_script <<'EOF'
+          #!/bin/bash
+          set -e
+          export DEBIAN_FRONTEND=noninteractive
+
+          mkdir -p /etc/apt/apt.conf.d
+          cat > /etc/apt/apt.conf.d/90ci-dpkg-conffiles <<CONF
+          Dpkg::Options {
+            "--force-confdef";
+            "--force-confold";
+          };
+          APT::Get::Assume-Yes "true";
+          APT::Get::quiet "true";
+          CONF
+          EOF
+          chmod +x repository/src/modules/00-apt-noninteractive/chroot_script
+
+          # Ensure our module is FIRST in the activation list
+          if grep -q '^ACTIVATE_MODULES="' repository/src/config; then
+            sed -i 's/^ACTIVATE_MODULES="/ACTIVATE_MODULES="00-apt-noninteractive /' repository/src/config
+          else
+            printf 'ACTIVATE_MODULES="00-apt-noninteractive $ACTIVATE_MODULES"\n' | cat - repository/src/config > repository/src/config.new
+            mv repository/src/config.new repository/src/config
+          fi
+
       - name: Inject apt noninteractive module (keep old conffiles)
         run: |
           set -e
