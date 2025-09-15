@@ -36,6 +36,11 @@ jobs:
       run: |
         cd repository/src
         ../../CustomPiOS/src/update-custompios-paths
+
+    - name: Install Python deps
+      run: |
+        python3 -m pip install --upgrade pip
+        python3 -m pip install gitpython
     
     - name: Build Image
       run: |
