@@ -15,7 +15,6 @@ jobs:
       - name: Update apt
         run: sudo apt-get update
 
-      # CustomPiOS deps (from its docs) + extras that help in CI
       - name: Install system dependencies
         run: |
           sudo apt-get install -y \
@@ -34,48 +33,86 @@ jobs:
           path: repository
           submodules: true
 
-      # NEW LOGIC: drop apt/dpkg/needrestart/policy-rc.d into the global overlay
-      # so they exist in the rootfs BEFORE CustomPiOS runs any apt actions.
-      - name: Force noninteractive apt/dpkg via base overlay
+      # 1) Base overlay: noninteractive apt/dpkg + needrestart + block service restarts
+      - name: Drop noninteractive config in base overlay
         run: |
           set -euo pipefail
           BASE="repository/src/filesystem"
           mkdir -p "$BASE/etc/apt/apt.conf.d" \
                    "$BASE/etc/dpkg/dpkg.cfg.d" \
                    "$BASE/etc/needrestart/conf.d" \
-                   "$BASE/usr/sbin" \
-                   "$BASE/etc"
+                   "$BASE/usr/sbin"
 
-          # Make apt noninteractive and install maintainer versions for changed conffiles
-          cat > "$BASE/etc/apt/apt.conf.d/90force-noninteractive" <<'EOF'
+          # APT noninteractive + always choose maintainer's conffiles (avoids prompts)
+          cat > "$BASE/etc/apt/apt.conf.d/00-ci-noninteractive" <<'EOF'
           APT::Get::Assume-Yes "true";
           Acquire::Retries "5";
-          Dpkg::Options { "--force-confdef"; "--force-confnew"; };
           DPkg::Options { "--force-confdef"; "--force-confnew"; };
           EOF
 
-          # Belt-and-suspenders: dpkg config read even outside apt
-          cat > "$BASE/etc/dpkg/dpkg.cfg.d/force-conf" <<'EOF'
+          # dpkg defaults too (covers direct dpkg invocations)
+          cat > "$BASE/etc/dpkg/dpkg.cfg.d/00-force-conf" <<'EOF'
           force-confdef
           force-confnew
           EOF
 
-          # Prevent "needrestart" from prompting
+          # needrestart: auto-accept restarts, silence kernel hints
           cat > "$BASE/etc/needrestart/conf.d/10-auto.conf" <<'EOF'
           $nrconf{restart} = 'a';
           $nrconf{kernelhints} = 0;
           EOF
 
-          # Block service restarts inside the chroot
+          # Don't try to start services inside chroot
           cat > "$BASE/usr/sbin/policy-rc.d" <<'EOF'
           #!/bin/sh
           exit 101
           EOF
           chmod +x "$BASE/usr/sbin/policy-rc.d"
 
-          # Also set the debconf frontend (helps with tzdata et al.)
-          if [ ! -f "$BASE/etc/environment" ] || ! grep -q '^DEBIAN_FRONTEND=noninteractive' "$BASE/etc/environment"; then
-            echo 'DEBIAN_FRONTEND=noninteractive' >> "$BASE/etc/environment"
+      # 2) Earliest module: enforce settings inside chroot and pre-install initramfs-tools*
+      - name: Create first module to preseed initramfs-tools
+        run: |
+          set -euo pipefail
+          MOD="repository/src/modules/00-preseed-initramfs"
+          mkdir -p "$MOD"
+
+          cat > "$MOD/start_chroot_script" <<'EOF'
+          #!/bin/bash
+          set -euxo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+
+          # Re-assert configs in chroot (in case base overlay ordering changes)
+          install -d /etc/apt/apt.conf.d /etc/dpkg/dpkg.cfg.d /etc/needrestart/conf.d /usr/sbin
+          cat > /etc/apt/apt.conf.d/00-ci-noninteractive <<'EOC'
+          APT::Get::Assume-Yes "true";
+          Acquire::Retries "5";
+          DPkg::Options { "--force-confdef"; "--force-confnew"; };
+          EOC
+          cat > /etc/dpkg/dpkg.cfg.d/00-force-conf <<'EOC'
+          force-confdef
+          force-confnew
+          EOC
+          cat > /etc/needrestart/conf.d/10-auto.conf <<'EOC'
+          $nrconf{restart} = 'a';
+          $nrconf{kernelhints} = 0;
+          EOC
+          cat > /usr/sbin/policy-rc.d <<'EOC'
+          #!/bin/sh
+          exit 101
+          EOC
+          chmod +x /usr/sbin/policy-rc.d
+
+          # Preconfigure the problematic packages explicitly using --force-confnew
+          apt-get update
+          apt-get -o DPkg::Options::=--force-confnew install -y initramfs-tools-core initramfs-tools
+          EOF
+          chmod +x "$MOD/start_chroot_script"
+
+          # Make sure our module runs first
+          if grep -q '^ACTIVATE_MODULES=' repository/src/config; then
+            sed -i 's/^ACTIVATE_MODULES="\([^"]*\)"/ACTIVATE_MODULES="00-preseed-initramfs \1"/' repository/src/config
+          else
+            echo 'ACTIVATE_MODULES="00-preseed-initramfs ${ACTIVATE_MODULES}"' >> repository/src/config
           fi
 
       - name: Download Raspberry Pi OS (armhf lite)
@@ -88,7 +125,6 @@ jobs:
           cd repository/src
           ../../CustomPiOS/src/update-custompios-paths
 
-      # (Optional) sanity check that qemu binfmt is registered
       - name: Show qemu binfmt registrations
         run: |
           sudo update-binfmts --display qemu-arm || true
@@ -96,7 +132,6 @@ jobs:
 
       - name: Build Image
         env:
-          # Helps avoid interactive postinsts in chroot (tzdata, etc.)
           DEBIAN_FRONTEND: noninteractive
         run: |
           sudo modprobe loop
@@ -122,7 +157,6 @@ jobs:
         with:
           files: ${{ env.image }}.zip
 
-      # --- Diagnostics: always keep logs so we know why anything failed ---
       - name: Print last lines of build.log on failure
         if: failure()
         run: |
