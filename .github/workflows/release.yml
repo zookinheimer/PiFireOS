@@ -34,6 +34,34 @@ jobs:
           path: repository
           submodules: true
 
+      - name: Inject noninteractive apt module & enable it
+        run: |
+          set -e
+          MODDIR=repository/src/modules/apt-noninteractive
+          mkdir -p "$MODDIR/filesystem/etc/apt/apt.conf.d" \
+                  "$MODDIR/filesystem/etc/dpkg/dpkg.cfg.d"
+          cat > "$MODDIR/start_chroot_script" <<'EOF'
+          #!/bin/bash
+          set -e
+          export DEBIAN_FRONTEND=noninteractive
+          ln -fs /usr/share/zoneinfo/Etc/UTC /etc/localtime || true
+          dpkg-reconfigure -f noninteractive tzdata || true
+          EOF
+          chmod +x "$MODDIR/start_chroot_script"
+          cat > "$MODDIR/filesystem/etc/apt/apt.conf.d/90force-noninteractive" <<'EOF'
+          Dpkg::Options { "--force-confdef"; "--force-confold"; };
+          APT::Get::Assume-Yes "true";
+          APT::Get::fix-broken "true";
+          Acquire::Retries "3";
+          EOF
+          cat > "$MODDIR/filesystem/etc/dpkg/dpkg.cfg.d/90-force-conffiles" <<'EOF'
+          force-confdef
+          force-confold
+          EOF
+          # Prepend module so it runs first
+          sed -i -E 's/^MODULES=(.*)$/MODULES=apt-noninteractive(\1)/' repository/src/config
+
+
       - name: Download Raspberry Pi OS (armhf lite)
         run: |
           cd repository/src/image
