@@ -72,6 +72,49 @@ jobs:
           cd repository/src
           ../../CustomPiOS/src/update-custompios-paths
 
+      - name: Inject noninteractive + dpkg options (CustomPiOS module)
+        run: |
+          set -euo pipefail
+          MOD="repository/src/modules/00-apt-noninteractive"
+          # overlay files that will exist inside the chrooted image
+          mkdir -p "$MOD/filesystem/etc/apt/apt.conf.d" \
+                  "$MOD/filesystem/etc/dpkg/dpkg.cfg.d" \
+                  "$MOD/filesystem/etc/needrestart/conf.d" \
+                  "$MOD/filesystem/usr/sbin"
+
+          # Make apt/dpkg auto-answer without prompting (install new conffiles by default)
+          cat > "$MOD/filesystem/etc/apt/apt.conf.d/90force-noninteractive" <<'EOF'
+          Dpkg::Options { "--force-confdef"; "--force-confnew"; };
+          APT::Get::Assume-Yes "true";
+          Acquire::Retries "5";
+          EOF
+
+          cat > "$MOD/filesystem/etc/dpkg/dpkg.cfg.d/force-conf" <<'EOF'
+          force-confdef
+          force-confnew
+          EOF
+
+          # Don’t pause on needrestart questions
+          cat > "$MOD/filesystem/etc/needrestart/conf.d/10-auto.conf" <<'EOF'
+          $nrconf{restart} = 'a';
+          $nrconf{kernelhints} = 0;
+          EOF
+
+          # Block service restarts during chroot package installs (just in case)
+          cat > "$MOD/filesystem/usr/sbin/policy-rc.d" <<'EOF'
+          #!/bin/sh
+          exit 101
+          EOF
+          chmod +x "$MOD/filesystem/usr/sbin/policy-rc.d"
+
+          # Ensure our module runs first
+          if grep -q '^ACTIVATE_MODULES' repository/src/config; then
+            sed -i 's/^\(ACTIVATE_MODULES\s*=\s*\)\"\(.*\)\"/\1"00-apt-noninteractive \2"/' repository/src/config
+          else
+            sed -i 's/^\(MODULES\s*=\s*\)\"\(.*\)\"/\1"00-apt-noninteractive \2"/' repository/src/config
+          fi
+
+
       - name: Force noninteractive dpkg in chroot (avoid initramfs prompt)
         run: |
           set -e
